@@ -1,0 +1,155 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest, target: windows-x64 }
+          - { name: macOS Apple Silicon, os: macos-latest, target: macos-arm64 }
+          - { name: macOS Intel, os: macos-15-intel, target: macos-x64 }
+          - { name: Linux x86_64, os: ubuntu-22.04, target: linux-x86_64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Tk (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Install build tools
+        run: |
+          python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller>=6.10,<7" pillow
+
+      - name: Compute version
+        run: |
+          V=0.0.0
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; fi
+          IFS=. read -r MA MI PA <<< "$V"
+          MA=${MA%%[^0-9]*}; MI=${MI%%[^0-9]*}; PA=${PA%%[^0-9]*}
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "VERSION_TUPLE=${MA:-0}, ${MI:-0}, ${PA:-0}, 0" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------ Windows
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          sed -i "s/1, 0, 0, 0/$VERSION_TUPLE/g; s/'1\.0\.0'/'$VERSION'/g" version_info.txt
+          pyinstaller --noconfirm --onefile --windowed --name PS5PayloadSender \
+            --icon icon.ico --version-file version_info.txt \
+            --add-data "icon.ico;." --add-data "icon.png;." ps5_payload_sender.py
+          mkdir -p out
+          cp dist/PS5PayloadSender.exe "out/PS5PayloadSender-${{ matrix.target }}.exe"
+
+      # ------------------------------------------------------------------ macOS
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --windowed --name "PS5 Payload Sender" --icon icon.png \
+            --osx-bundle-identifier com.wonderhunter.ps5payloadsender \
+            --add-data "icon.ico:." --add-data "icon.png:." ps5_payload_sender.py
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "dist/PS5 Payload Sender.app/Contents/Info.plist"
+          mkdir -p dmg out
+          cp -R "dist/PS5 Payload Sender.app" dmg/
+          ln -s /Applications dmg/Applications
+          for i in 1 2 3 4 5; do
+            hdiutil create -volname "PS5 Payload Sender" -srcfolder dmg -ov -format UDZO \
+              "out/PS5PayloadSender-${{ matrix.target }}.dmg" && break
+            sleep 5
+          done
+          test -f "out/PS5PayloadSender-${{ matrix.target }}.dmg"
+
+      # ------------------------------------------------------------------ Linux
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p out
+
+          # single-file binary
+          pyinstaller --noconfirm --onefile --windowed --name ps5-payload-sender \
+            --add-data "icon.ico:." --add-data "icon.png:." ps5_payload_sender.py
+          tar -czf "out/PS5PayloadSender-${{ matrix.target }}.tar.gz" -C dist ps5-payload-sender
+
+          # folder build shared by the AppImage and the .deb
+          pyinstaller --noconfirm --onedir --windowed --name ps5-payload-sender \
+            --distpath dist-dir --workpath build-dir \
+            --add-data "icon.ico:." --add-data "icon.png:." ps5_payload_sender.py
+
+          # AppImage
+          mkdir -p AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps
+          cp -R dist-dir/ps5-payload-sender AppDir/usr/lib/
+          cp packaging/ps5-payload-sender.desktop AppDir/
+          cp packaging/ps5-payload-sender.desktop AppDir/usr/share/applications/
+          cp icon.png AppDir/ps5-payload-sender.png
+          cp icon.png AppDir/usr/share/icons/hicolor/512x512/apps/ps5-payload-sender.png
+          printf '#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/lib/ps5-payload-sender/ps5-payload-sender" "$@"\n' > AppDir/AppRun
+          chmod +x AppDir/AppRun
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir \
+            "out/PS5PayloadSender-x86_64.AppImage"
+
+          # .deb
+          PKG=deb/ps5-payload-sender
+          mkdir -p $PKG/DEBIAN $PKG/opt $PKG/usr/bin $PKG/usr/share/applications $PKG/usr/share/icons/hicolor/512x512/apps
+          cp -R dist-dir/ps5-payload-sender $PKG/opt/
+          ln -s /opt/ps5-payload-sender/ps5-payload-sender $PKG/usr/bin/ps5-payload-sender
+          cp packaging/ps5-payload-sender.desktop $PKG/usr/share/applications/
+          cp icon.png $PKG/usr/share/icons/hicolor/512x512/apps/ps5-payload-sender.png
+          DEB_VERSION=$VERSION; [ "$DEB_VERSION" = "0.0.0" ] && DEB_VERSION="0.0.0~dev"
+          cat > $PKG/DEBIAN/control <<EOF
+          Package: ps5-payload-sender
+          Version: $DEB_VERSION
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: WonderHunter <noreply@github.com>
+          Homepage: https://github.com/WonderHunter/ps5-payload-sender
+          Description: Send ELF payloads to a PS5 loader
+           Small GUI to send ELF payloads over TCP to a PS5 payload loader,
+           with one-click resend of recent payloads.
+          EOF
+          dpkg-deb --build --root-owner-group $PKG "out/PS5PayloadSender-${{ matrix.target }}.deb"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PS5PayloadSender-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: out/*
+          generate_release_notes: true

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PS5 Payload Sender
+Comment=Send ELF payloads to a PS5 loader
+Exec=ps5-payload-sender
+Icon=ps5-payload-sender
+Categories=Utility;Network;
+Terminal=false

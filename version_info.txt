@@ -1,0 +1,16 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(filevers=(1, 0, 0, 0), prodvers=(1, 0, 0, 0), mask=0x3f, flags=0x0, OS=0x40004,
+                    fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040C04B0', [
+      StringStruct('CompanyName', 'WonderHunter'),
+      StringStruct('FileDescription', 'PS5 Payload Sender'),
+      StringStruct('FileVersion', '1.0.0'),
+      StringStruct('InternalName', 'PS5PayloadSender'),
+      StringStruct('LegalCopyright', 'WonderHunter'),
+      StringStruct('OriginalFilename', 'PS5PayloadSender.exe'),
+      StringStruct('ProductName', 'PS5 Payload Sender'),
+      StringStruct('ProductVersion', '1.0.0')])]),
+    VarFileInfo([VarStruct('Translation', [1036, 1200])])
+  ]
+)
